@@ -1,0 +1,4 @@
+[core]
+    remote = storage
+['remote "storage"']
+    url = gs://yukti-virtual-metrics-474115-g3-newbucket-1
