@@ -200,7 +200,24 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
-
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.pkl
+*.csv
+/models/*.pkl
+/data/*.csv
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+*.pyc
+.DS_Store
+evaluation_results.json
+test_output.txt
+eval_output.txt
+report.md
 # Marimo
 marimo/_static/
 marimo/_lsp/
