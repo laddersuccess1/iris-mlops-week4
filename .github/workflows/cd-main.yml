@@ -8,7 +8,7 @@ on:
 env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
   GKE_CLUSTER: ${{ secrets.GKE_CLUSTER_NAME }}
-  GKE_ZONE: ${{ secrets.GKE_ZONE }}
+  GKE_LOCATION: ${{ secrets.GKE_ZONE }}
   GAR_LOCATION: ${{ secrets.GAR_LOCATION }}
   REPOSITORY: iris-api-repo
   IMAGE: iris-api
@@ -50,7 +50,7 @@ jobs:
     
     - name: Get GKE credentials
       run: |
-        gcloud container clusters get-credentials ${{ env.GKE_CLUSTER }} --location ${{ env.GKE_ZONE }}
+        gcloud container clusters get-credentials ${{ env.GKE_CLUSTER }} --location=${{ env.GKE_LOCATION }}
     
     - name: Update deployment manifest
       run: |
