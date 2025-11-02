@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
       - name: iris-api
-        image: REGION-docker.pkg.dev/PROJECT_ID/REPOSITORY_NAME/iris-api:latest
+        image: us-central1-docker.pkg.dev/virtual-metrics-474115-g3/iris-api-repo/iris-api:latest
         ports:
         - containerPort: 8080
           name: http
