@@ -1,0 +1,72 @@
+name: CI Pipeline - Main
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  test-and-evaluate:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+    
+    - name: Setup DVC
+      uses: iterative/setup-dvc@v1
+    
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v1
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+    
+    - name: Pull model and data from DVC
+      run: |
+        dvc pull models/iris_model.pkl.dvc
+        dvc pull data/test_data.csv.dvc
+    
+    - name: Run unit tests
+      run: |
+        pytest test_model.py -v --tb=short
+    
+    - name: Run evaluation
+      run: |
+        python evaluate.py
+    
+    - name: Setup CML
+      uses: iterative/setup-cml@v1
+    
+    - name: Generate CML Report
+      env:
+        REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        echo "# Model Evaluation Report - Main Branch" > report.md
+        echo "" >> report.md
+        echo "## Test Results" >> report.md
+        pytest test_model.py -v > test_output.txt 2>&1 || true
+        echo '```' >> report.md
+        cat test_output.txt >> report.md
+        echo '```' >> report.md
+        echo "" >> report.md
+        echo "## Model Performance" >> report.md
+        python evaluate.py > eval_output.txt 2>&1
+        echo '```' >> report.md
+        cat eval_output.txt >> report.md
+        echo '```' >> report.md
+        
+        cml comment create report.md
