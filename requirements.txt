@@ -4,3 +4,9 @@ numpy==1.24.3
 pytest==7.4.0
 dvc==3.0.0
 dvc-gs==2.22.0
+fastapi==0.104.1
+uvicorn==0.24.0
+pydantic==2.5.0
+fastapi==0.104.1
+uvicorn==0.24.0
+pydantic==2.5.0
