@@ -1,0 +1,201 @@
+name: Stress Test Deployment
+
+on:
+  workflow_run:
+    workflows: ["CD Pipeline - Deploy to GKE"]
+    types:
+      - completed
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GKE_CLUSTER: ${{ secrets.GKE_CLUSTER_NAME }}
+  GKE_LOCATION: ${{ secrets.GKE_ZONE }}
+
+jobs:
+  stress-test:
+    name: Run Stress Tests on Deployed API
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    
+    permissions:
+      contents: read
+      id-token: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+    
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        install_components: 'gke-gcloud-auth-plugin'
+    
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
+    
+    - name: Get GKE credentials
+      run: |
+        export USE_GKE_GCLOUD_AUTH_PLUGIN=True
+        gcloud container clusters get-credentials ${{ env.GKE_CLUSTER }} --location=${{ env.GKE_LOCATION }}
+    
+    - name: Wait for deployment to be ready
+      run: |
+        kubectl rollout status deployment/iris-api-deployment --timeout=5m
+        echo "Waiting additional 30s for pods to stabilize..."
+        sleep 30
+    
+    - name: Get Service URL
+      id: get-url
+      run: |
+        SERVICE_IP=$(kubectl get service iris-api-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+        echo "service_ip=$SERVICE_IP" >> $GITHUB_OUTPUT
+        echo "Service IP: $SERVICE_IP"
+    
+    - name: Verify API Health
+      run: |
+        API_URL="http://${{ steps.get-url.outputs.service_ip }}/health"
+        echo "Testing health endpoint: $API_URL"
+        
+        for i in {1..10}; do
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" $API_URL)
+          if [ "$STATUS" -eq 200 ]; then
+            echo "API is healthy!"
+            curl -s $API_URL | jq .
+            break
+          else
+            echo "Attempt $i: API not ready (Status: $STATUS). Waiting..."
+            sleep 10
+          fi
+        done
+    
+    - name: Install wrk
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential libssl-dev git
+        cd /tmp
+        git clone https://github.com/wg/wrk.git
+        cd wrk
+        make
+        sudo cp wrk /usr/local/bin/
+        wrk --version
+    
+    - name: Create wrk script
+      run: |
+        cat > wrk_script.lua << 'EOFWRK'
+        wrk.method = "POST"
+        wrk.body   = '{"sepal_length": 5.1, "sepal_width": 3.5, "petal_length": 1.4, "petal_width": 0.2}'
+        wrk.headers["Content-Type"] = "application/json"
+        EOFWRK
+    
+    - name: Apply HPA Configuration
+      run: |
+        kubectl apply -f hpa.yaml
+        echo "Waiting for HPA to initialize..."
+        sleep 10
+        kubectl get hpa
+    
+    - name: Stress Test - 1000 requests
+      run: |
+        API_URL="http://${{ steps.get-url.outputs.service_ip }}/predict"
+        echo "============================================"
+        echo "Stress Test 1: 1000 requests (10 concurrent)"
+        echo "============================================"
+        wrk -t2 -c10 -d30s -s wrk_script.lua $API_URL
+        
+        echo ""
+        echo "Checking pod status after test 1..."
+        kubectl get pods -l app=iris-api
+        kubectl get hpa iris-api-hpa
+        
+        sleep 20
+    
+    - name: Stress Test - High Load
+      run: |
+        API_URL="http://${{ steps.get-url.outputs.service_ip }}/predict"
+        echo "============================================"
+        echo "Stress Test 2: High Load (50 concurrent)"
+        echo "============================================"
+        wrk -t10 -c50 -d60s -s wrk_script.lua $API_URL
+        
+        echo ""
+        echo "Checking pod status after test 2..."
+        kubectl get pods -l app=iris-api
+        kubectl get hpa iris-api-hpa
+        
+        sleep 20
+    
+    - name: Verify Autoscaling Occurred
+      run: |
+        echo "============================================"
+        echo "Autoscaling Verification"
+        echo "============================================"
+        
+        CURRENT_REPLICAS=$(kubectl get deployment iris-api-deployment -o jsonpath='{.status.replicas}')
+        echo "Current replicas: $CURRENT_REPLICAS"
+        
+        kubectl describe hpa iris-api-hpa
+        
+        if [ "$CURRENT_REPLICAS" -gt 1 ]; then
+          echo "✓ Autoscaling successful! Scaled to $CURRENT_REPLICAS pods"
+        else
+          echo "⚠ Warning: Still at 1 pod. Autoscaling may not have triggered."
+        fi
+    
+    - name: Test Bottleneck Scenario
+      run: |
+        echo "============================================"
+        echo "Bottleneck Test: Restricting to 1 Pod"
+        echo "============================================"
+        
+        kubectl delete hpa iris-api-hpa
+        kubectl scale deployment iris-api-deployment --replicas=1
+        
+        echo "Waiting for scale down to 1 pod..."
+        sleep 30
+        kubectl get pods -l app=iris-api
+        
+        API_URL="http://${{ steps.get-url.outputs.service_ip }}/predict"
+        
+        echo ""
+        echo "Test with 1000 requests:"
+        wrk -t4 -c10 -d30s -s wrk_script.lua $API_URL
+        
+        sleep 10
+        
+        echo ""
+        echo "Test with 2000 requests (increased load):"
+        wrk -t8 -c20 -d30s -s wrk_script.lua $API_URL
+        
+        echo ""
+        echo "✓ Bottleneck scenario demonstrated"
+    
+    - name: Restore Autoscaling
+      if: always()
+      run: |
+        echo "Restoring HPA configuration..."
+        kubectl apply -f hpa.yaml
+        kubectl get hpa
+    
+    - name: Generate Test Report
+      if: always()
+      run: |
+        echo "============================================"
+        echo "Stress Test Summary"
+        echo "============================================"
+        echo ""
+        echo "Final Pod Status:"
+        kubectl get pods -l app=iris-api -o wide
+        echo ""
+        echo "Final HPA Status:"
+        kubectl get hpa iris-api-hpa || echo "HPA not found"
+        echo ""
+        echo "Recent Events:"
+        kubectl get events --sort-by='.lastTimestamp' | grep iris-api | tail -10
