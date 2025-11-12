@@ -8,7 +8,7 @@ on:
 env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
   GKE_CLUSTER: ${{ secrets.GKE_CLUSTER_NAME }}
-  GKE_LOCATION: ${{ secrets.GKE_ZONE }}
+  GKE_ZONE: ${{ secrets.GKE_ZONE }}
 
 jobs:
   stress-test:
@@ -41,7 +41,8 @@ jobs:
     - name: Get GKE credentials
       run: |
         export USE_GKE_GCLOUD_AUTH_PLUGIN=True
-        gcloud container clusters get-credentials ${{ env.GKE_CLUSTER }} --location=${{ env.GKE_LOCATION }}
+        gcloud container clusters get-credentials ${{ env.GKE_CLUSTER }} --zone=${{ env.GKE_ZONE }} --project=${{ env.PROJECT_ID }}
+        kubectl get nodes
     
     - name: Wait for deployment to be ready
       run: |
@@ -91,6 +92,10 @@ jobs:
         wrk.body   = '{"sepal_length": 5.1, "sepal_width": 3.5, "petal_length": 1.4, "petal_width": 0.2}'
         wrk.headers["Content-Type"] = "application/json"
         EOFWRK
+    
+    - name: Check Current HPA Status
+      run: |
+        kubectl get hpa iris-api-hpa || echo "HPA not found, will create"
     
     - name: Apply HPA Configuration
       run: |
@@ -152,7 +157,7 @@ jobs:
         echo "Bottleneck Test: Restricting to 1 Pod"
         echo "============================================"
         
-        kubectl delete hpa iris-api-hpa
+        kubectl delete hpa iris-api-hpa || echo "HPA already deleted"
         kubectl scale deployment iris-api-deployment --replicas=1
         
         echo "Waiting for scale down to 1 pod..."
@@ -178,8 +183,8 @@ jobs:
       if: always()
       run: |
         echo "Restoring HPA configuration..."
-        kubectl apply -f hpa.yaml
-        kubectl get hpa
+        kubectl apply -f hpa.yaml || echo "Failed to apply HPA, may already exist"
+        kubectl get hpa || echo "Cannot get HPA status"
     
     - name: Generate Test Report
       if: always()
@@ -189,10 +194,10 @@ jobs:
         echo "============================================"
         echo ""
         echo "Final Pod Status:"
-        kubectl get pods -l app=iris-api -o wide
+        kubectl get pods -l app=iris-api -o wide || echo "Cannot get pod status"
         echo ""
         echo "Final HPA Status:"
         kubectl get hpa iris-api-hpa || echo "HPA not found"
         echo ""
         echo "Recent Events:"
-        kubectl get events --sort-by='.lastTimestamp' | grep iris-api | tail -10
+        kubectl get events --sort-by='.lastTimestamp' | grep iris-api | tail -10 || echo "Cannot get events"
